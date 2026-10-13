@@ -1,0 +1,7 @@
+build/
+*.so
+test_shim
+.gradle/
+.idea/
+*.swp
+*~
