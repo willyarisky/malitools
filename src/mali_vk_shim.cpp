@@ -14,6 +14,8 @@
 static void* s_real_vulkan_handle = nullptr;
 static PFN_vkGetInstanceProcAddr s_real_vkGetInstanceProcAddr = nullptr;
 static PFN_vkGetDeviceProcAddr s_real_vkGetDeviceProcAddr = nullptr;
+static PFN_vkEnumerateDeviceExtensionProperties s_real_vkEnumerateDeviceExtensionProperties = nullptr;
+static PFN_vkCreateDevice s_real_vkCreateDevice = nullptr;
 
 // Extra extensions required by DXVK / Proton that Mali driver often omits
 static const char* EMULATED_EXTENSIONS[] = {
@@ -33,10 +35,12 @@ static void init_real_vulkan() {
         LOGE("Failed to open real libvulkan.so: %s", dlerror());
         return;
     }
-    s_real_vulkan_handle = s_real_vulkan_handle;
     s_real_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(s_real_vulkan_handle, "vkGetInstanceProcAddr");
     s_real_vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)dlsym(s_real_vulkan_handle, "vkGetDeviceProcAddr");
-    LOGI("MaliVulkanShim initialized. Real loader hooked successfully.");
+    s_real_vkEnumerateDeviceExtensionProperties = (PFN_vkEnumerateDeviceExtensionProperties)dlsym(s_real_vulkan_handle, "vkEnumerateDeviceExtensionProperties");
+    s_real_vkCreateDevice = (PFN_vkCreateDevice)dlsym(s_real_vulkan_handle, "vkCreateDevice");
+    LOGI("MaliVulkanShim initialized. Real loader hooked successfully (enum_exts: %p, create_dev: %p).",
+         s_real_vkEnumerateDeviceExtensionProperties, s_real_vkCreateDevice);
 }
 
 // Hooked vkEnumerateDeviceExtensionProperties
@@ -49,10 +53,15 @@ extern "C" VkResult vkEnumerateDeviceExtensionProperties(
     init_real_vulkan();
     if (!s_real_vulkan_handle) return VK_ERROR_INITIALIZATION_FAILED;
 
-    PFN_vkEnumerateDeviceExtensionProperties real_func = 
-        (PFN_vkEnumerateDeviceExtensionProperties)s_real_vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateDeviceExtensionProperties");
+    PFN_vkEnumerateDeviceExtensionProperties real_func = s_real_vkEnumerateDeviceExtensionProperties;
+    if (!real_func && s_real_vkGetInstanceProcAddr) {
+        real_func = (PFN_vkEnumerateDeviceExtensionProperties)s_real_vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateDeviceExtensionProperties");
+    }
     
-    if (!real_func) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!real_func) {
+        LOGE("real_func for vkEnumerateDeviceExtensionProperties could not be resolved!");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
     // Get real device properties first
     uint32_t real_count = 0;
@@ -105,9 +114,14 @@ extern "C" VkResult vkCreateDevice(
     init_real_vulkan();
     if (!s_real_vulkan_handle) return VK_ERROR_INITIALIZATION_FAILED;
 
-    PFN_vkCreateDevice real_func = 
-        (PFN_vkCreateDevice)s_real_vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateDevice");
-    if (!real_func) return VK_ERROR_INITIALIZATION_FAILED;
+    PFN_vkCreateDevice real_func = s_real_vkCreateDevice;
+    if (!real_func && s_real_vkGetInstanceProcAddr) {
+        real_func = (PFN_vkCreateDevice)s_real_vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateDevice");
+    }
+    if (!real_func) {
+        LOGE("real_func for vkCreateDevice could not be resolved!");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
     // Filter out our emulated extensions so stock Mali doesn't reject vkCreateDevice with VK_ERROR_EXTENSION_NOT_PRESENT
     VkDeviceCreateInfo modifiedInfo = *pCreateInfo;
